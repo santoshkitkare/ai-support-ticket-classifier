@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import datetime
 import boto3
+from decimal import Decimal
 import requests
 
 # Initialize clients
@@ -48,6 +49,7 @@ def classify_with_openai(prompt: str) -> dict:
 
 
 def lambda_handler(event, context):
+    print(f"Event: {event}")
     body = json.loads(event.get("body") or "{}")
     text = body.get("ticket_text", "").strip()
 
@@ -62,11 +64,11 @@ def lambda_handler(event, context):
         "ticket_id": ticket_id,
         "ticket_text": text,
         "category": result.get("category", "Other"),
-        "confidence": float(result.get("confidence", 0.0)),
+        "confidence": Decimal(str(float(result.get("confidence", 0.0)))),
         "explanation": result.get("explanation", ""),
         "model": OPENAI_MODEL,
         "created_at": datetime.utcnow().isoformat() + "Z",
     }
 
     table.put_item(Item=item)
-    return {"statusCode": 200, "body": json.dumps(item)}
+    return {"statusCode": 200, "body": json.dumps(item, default=str)}
