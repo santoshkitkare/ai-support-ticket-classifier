@@ -66,52 +66,75 @@ def classify_with_bedrock(text: str) -> dict:
     )
 
     try:
-        # print(f"Response : {response}")
+        print(f"Response : {response}")
         # response is the output from bedrock_runtime.invoke_model(...)
         streaming_body = response['body']
 
         # Read and decode
         model_output = streaming_body.read().decode("utf-8")
-        # print(f"Model Output: {model_output}")
+        print(f"Model Output: {model_output}")
 
         # Parse to dictionary
         result = json.loads(model_output)
 
         # Now you can safely use 'get' as expected, for example:
-        return json.loads(result.get("content", [{}])[0].get("text", ""))
+        text = json.loads(result.get("content", [{}])[0].get("text", ""))
+        print(f"Final Result :{text}")
+        return text
     except Exception:
-        return {"category": "Other", "confidence": 0.0, "explanation": "Could not parse model response."}
-        
+        parsed = {"category": "Other", "confidence": 0.0, "explanation": "Could not parse model response."}
 
 
 def lambda_handler(event, context):
     print(f"Event: {event}")
+    http_methdod = event.get("httpMethod")
+    path = event.get("path")
     body = json.loads(event.get("body") or "{}")
-    # body = event.get("body") or "{}"
-    text = body.get("ticket_text", "").strip()
-    model = body.get("model", "openai").strip()
-    model_name = OPENAI_MODEL
 
-    if not text:
-        return {"statusCode": 400, "body": json.dumps({"error": "ticket_text required"})}
+    if http_methdod == "POST" and path.endswith("classify"):
+        # body = event.get("body") or "{}"
+        text = body.get("ticket_text", "").strip()
+        model = body.get("model", "openai").strip()
+        model_name = OPENAI_MODEL
+
+        if not text:
+            return {"statusCode": 400, "body": json.dumps({"error": "ticket_text required"})}
+        
+        if model == "bedrock":
+            result = classify_with_bedrock(text)
+            print("Got Return: {result}")
+            model_name = BEDROCK_MODEL
+        else:
+            result = classify_with_openai(text)
+
+        ticket_id = str(uuid.uuid4())
+        item = {
+            "ticket_id": ticket_id,
+            "ticket_text": text,
+            "category": result.get("category", "Other"),
+            "confidence": Decimal(str(float(result.get("confidence", 0.0)))),
+            "explanation": result.get("explanation", ""),
+            "model": model_name,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+        table.put_item(Item=item)
+        return {"statusCode": 200, "body": json.dumps(item, default=str)}
     
-    if model == "bedrock":
-        result = classify_with_bedrock(text)
-        print("Got Return: {result}")
-        model_name = BEDROCK_MODEL
-    else:
-        result = classify_with_openai(text)
+    if http_methdod == "GET" and path.endswith("tickets"):
+        all_items = []
+        response = table.scan()  # Scan returns all items
+        items = response.get('Items', [])
+        all_items.extend(items)
 
-    ticket_id = str(uuid.uuid4())
-    item = {
-        "ticket_id": ticket_id,
-        "ticket_text": text,
-        "category": result.get("category", "Other"),
-        "confidence": Decimal(str(float(result.get("confidence", 0.0)))),
-        "explanation": result.get("explanation", ""),
-        "model": model_name,
-        "created_at": datetime.utcnow().isoformat() + "Z",
-    }
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            items = response.get('Items', [])
+            all_items.extend(items)
 
-    table.put_item(Item=item)
-    return {"statusCode": 200, "body": json.dumps(item, default=str)}
+        print(f"Total item fetched from DynamoDB table: {len(all_items)}")
+        # sort descending by timestamp
+        all_items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return {"statusCode": 200, "body": json.dumps(all_items[:20], default=str)}
+
+    return {"statusCode": 404, "body": json.dumps({"error": "Unknown path"})}
