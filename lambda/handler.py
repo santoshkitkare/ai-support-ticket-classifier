@@ -8,32 +8,33 @@ import requests
 
 # Initialize clients
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('REGION'))
+bedrock = boto3.client("bedrock-runtime", region_name="ap-south-1")
+
 table = dynamodb.Table(os.getenv('DDB_TABLE'))
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+BEDROCK_MODEL = os.getenv('BEDROCK_MODEL', 'anthropic.claude-3-haiku-20240307-v1:0')
 
-
-def build_prompt(ticket_text: str) -> str:
-    return f"""
+SYSTEM_PROMPT = f"""
 You are a support ticket classifier. 
 Analyze the ticket and return a JSON response with these keys: category, confidence, explanation.
 Allowed categories: Network, Billing, Hardware, Software, Account, Other.
+Return only valid JSON, nothing else.
 Example:
 Ticket: "Router light blinking red, no internet"
 Response: {{"category": "Network", "confidence": 0.91, "explanation": "Network connectivity failure"}}
-
-Ticket: "{ticket_text}"
 """
 
-
-def classify_with_openai(prompt: str) -> dict:
+def classify_with_openai(text: str) -> dict:
+    # prompt = build_prompt(text)
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
         "model": OPENAI_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Ticket: {text}"}],
         "temperature": 0.0,
         "max_tokens": 200,
     }
@@ -48,16 +49,58 @@ def classify_with_openai(prompt: str) -> dict:
         return {"category": "Other", "confidence": 0.0, "explanation": content}
 
 
+def classify_with_bedrock(text: str) -> dict:
+    # prompt = build_prompt(text)
+
+    response = bedrock.invoke_model(
+        modelId=BEDROCK_MODEL,
+        body=json.dumps({"anthropic_version": "bedrock-2023-05-31",
+            "system": SYSTEM_PROMPT,
+            "messages": [
+                {"role": "user", "content": f"Ticket: {text}"}
+            ],
+            "max_tokens": 200
+        }),
+        contentType="application/json",
+        accept="application/json"
+    )
+
+    try:
+        # print(f"Response : {response}")
+        # response is the output from bedrock_runtime.invoke_model(...)
+        streaming_body = response['body']
+
+        # Read and decode
+        model_output = streaming_body.read().decode("utf-8")
+        # print(f"Model Output: {model_output}")
+
+        # Parse to dictionary
+        result = json.loads(model_output)
+
+        # Now you can safely use 'get' as expected, for example:
+        return json.loads(result.get("content", [{}])[0].get("text", ""))
+    except Exception:
+        return {"category": "Other", "confidence": 0.0, "explanation": "Could not parse model response."}
+        
+
+
 def lambda_handler(event, context):
     print(f"Event: {event}")
     body = json.loads(event.get("body") or "{}")
+    # body = event.get("body") or "{}"
     text = body.get("ticket_text", "").strip()
+    model = body.get("model", "openai").strip()
+    model_name = OPENAI_MODEL
 
     if not text:
         return {"statusCode": 400, "body": json.dumps({"error": "ticket_text required"})}
-
-    prompt = build_prompt(text)
-    result = classify_with_openai(prompt)
+    
+    if model == "bedrock":
+        result = classify_with_bedrock(text)
+        print("Got Return: {result}")
+        model_name = BEDROCK_MODEL
+    else:
+        result = classify_with_openai(text)
 
     ticket_id = str(uuid.uuid4())
     item = {
@@ -66,7 +109,7 @@ def lambda_handler(event, context):
         "category": result.get("category", "Other"),
         "confidence": Decimal(str(float(result.get("confidence", 0.0)))),
         "explanation": result.get("explanation", ""),
-        "model": OPENAI_MODEL,
+        "model": model_name,
         "created_at": datetime.utcnow().isoformat() + "Z",
     }
 
