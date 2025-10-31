@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AI Support Ticket Classifier stack
+
+Parameters:
+  BedrockModelParameter:
+    Type: String
+    Default: anthropic.claude-3-haiku-20240307
+    Description: Model ID to use for AWS Bedrock
+
+  OpenAIApiKeyParameter:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API key used by Lambda
+
+  OpenAIModelParameter:
+    Type: String
+    Default: gpt-4o-mini
+    Description: OpenAI model name
+
+Resources:
+
+  SupportTicketsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SupportTickets
+      AttributeDefinitions:
+        - AttributeName: ticket_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ticket_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  TicketClassifierLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TicketClassifierLambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+  TicketClassifierLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: TicketClassifierLambda
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt TicketClassifierLambdaRole.Arn
+      Code:
+        S3Bucket: santosh-s3-bucket-demo
+        S3Key: lambda_function/AiSupportTicketClassifierv2.zip
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DDB_TABLE: !Ref SupportTicketsTable
+          BEDROCK_MODEL: !Ref BedrockModelParameter
+          OPENAI_API_KEY: !Ref OpenAIApiKeyParameter
+          OPENAI_MODEL: !Ref OpenAIModelParameter
+          REGION: !Ref AWS::Region
+
+  TicketClassifierApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: TicketClassifierAPI
+      ProtocolType: HTTP
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref TicketClassifierApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt TicketClassifierLambda.Arn
+      PayloadFormatVersion: "2.0"
+
+  ApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TicketClassifierLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TicketClassifierApi}/*/*
+
+  ClassifyRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref TicketClassifierApi
+      RouteKey: "POST /classify"
+      Target: !Sub integrations/${LambdaIntegration}
+
+  TicketsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref TicketClassifierApi
+      RouteKey: "GET /tickets"
+      Target: !Sub integrations/${LambdaIntegration}
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref TicketClassifierApi
+      StageName: prod
+      AutoDeploy: true
+
+Outputs:
+  ApiUrl:
+    Description: "Invoke URL for API Gateway"
+    Value: !Sub "https://${TicketClassifierApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"

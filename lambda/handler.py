@@ -87,11 +87,11 @@ def classify_with_bedrock(text: str) -> dict:
 
 def lambda_handler(event, context):
     print(f"Event: {event}")
-    http_methdod = event.get("httpMethod")
-    path = event.get("path")
+    http_methdod = event.get("routeKey")
+    path = event.get("rawPath")
     body = json.loads(event.get("body") or "{}")
 
-    if http_methdod == "POST" and path.endswith("classify"):
+    if http_methdod.startswith("POST") and path.endswith("classify"):
         # body = event.get("body") or "{}"
         text = body.get("ticket_text", "").strip()
         model = body.get("model", "openai").strip()
@@ -121,7 +121,7 @@ def lambda_handler(event, context):
         table.put_item(Item=item)
         return {"statusCode": 200, "body": json.dumps(item, default=str)}
     
-    if http_methdod == "GET" and path.endswith("tickets"):
+    if http_methdod.startswith("GET") and path.endswith("tickets"):
         all_items = []
         response = table.scan()  # Scan returns all items
         items = response.get('Items', [])
