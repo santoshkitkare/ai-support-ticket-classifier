@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AI Support Ticket Classifier using OpenAI and AWS Bedrock
+
+Parameters:
+  LambdaS3Bucket:
+    Type: String
+    Description: Existing S3 bucket where Lambda ZIP is stored
+
+  LambdaS3Key:
+    Type: String
+    Description: Key (file name) of Lambda ZIP in S3
+
+  BedrockModelParameter:
+    Type: String
+    Default: anthropic.claude-3-haiku-20240307-v1:0
+    Description: Model ID to use for AWS Bedrock
+
+  OpenAIApiKeyParameter:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API key used by Lambda
+
+  OpenAIModelParameter:
+    Type: String
+    Default: gpt-4o-mini
+    Description: OpenAI model name to use
+
+Resources:
+  # -----------------
+  # DynamoDB Table
+  # -----------------
+  TicketsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ai_support_tickets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ticket_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ticket_id
+          KeyType: HASH
+
+  # -----------------
+  # IAM Role for Lambda
+  # -----------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ai-ticket-classifier-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+  # -----------------
+  # Lambda Function
+  # -----------------
+  AITicketClassifierLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ai-ticket-classifier
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          BEDROCK_MODEL: !Ref BedrockModelParameter
+          OPENAI_API_KEY: !Ref OpenAIApiKeyParameter
+          OPENAI_MODEL: !Ref OpenAIModelParameter
+          REGION: !Ref AWS::Region
+          TABLE_NAME: !Ref TicketsTable
+
+  # -----------------
+  # API Gateway
+  # -----------------
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: ai-ticket-classifier-api
+      EndpointConfiguration:
+        Types: ["REGIONAL"]
+
+  ApiResourceClassify:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: classify
+
+  ApiResourceTickets:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: tickets
+
+  ApiMethodClassifyPost:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceClassify
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AITicketClassifierLambda.Arn}/invocations
+
+  ApiMethodTicketsGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceTickets
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AITicketClassifierLambda.Arn}/invocations
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AITicketClassifierLambda
+      Principal: apigateway.amazonaws.com
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiMethodClassifyPost
+      - ApiMethodTicketsGet
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+Outputs:
+  ApiUrl:
+    Description: Invoke URL for API Gateway
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
