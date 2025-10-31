@@ -1,10 +1,18 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: AI Support Ticket Classifier stack
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AI Support Ticket Classifier using OpenAI and AWS Bedrock
 
 Parameters:
+  LambdaS3Bucket:
+    Type: String
+    Description: Existing S3 bucket where Lambda ZIP is stored
+
+  LambdaS3Key:
+    Type: String
+    Description: Key (file name) of Lambda ZIP in S3
+
   BedrockModelParameter:
     Type: String
-    Default: anthropic.claude-3-haiku-20240307
+    Default: anthropic.claude-3-haiku-20240307-v1:0
     Description: Model ID to use for AWS Bedrock
 
   OpenAIApiKeyParameter:
@@ -15,26 +23,31 @@ Parameters:
   OpenAIModelParameter:
     Type: String
     Default: gpt-4o-mini
-    Description: OpenAI model name
+    Description: OpenAI model name to use
 
 Resources:
-
-  SupportTicketsTable:
+  # -----------------
+  # DynamoDB Table
+  # -----------------
+  TicketsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: SupportTickets
+      TableName: ai_support_tickets
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: ticket_id
           AttributeType: S
       KeySchema:
         - AttributeName: ticket_id
           KeyType: HASH
-      BillingMode: PAY_PER_REQUEST
 
-  TicketClassifierLambdaRole:
+  # -----------------
+  # IAM Role for Lambda
+  # -----------------
+  LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: TicketClassifierLambdaRole
+      RoleName: ai-ticket-classifier-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -45,71 +58,98 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
 
-  TicketClassifierLambda:
+  # -----------------
+  # Lambda Function
+  # -----------------
+  AITicketClassifierLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: TicketClassifierLambda
+      FunctionName: ai-ticket-classifier
       Runtime: python3.11
       Handler: handler.lambda_handler
-      Role: !GetAtt TicketClassifierLambdaRole.Arn
+      Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        S3Bucket: santosh-s3-bucket-demo
-        S3Key: lambda_function/AiSupportTicketClassifierv2.zip
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
       Timeout: 30
-      MemorySize: 512
+      MemorySize: 256
       Environment:
         Variables:
-          DDB_TABLE: !Ref SupportTicketsTable
           BEDROCK_MODEL: !Ref BedrockModelParameter
           OPENAI_API_KEY: !Ref OpenAIApiKeyParameter
           OPENAI_MODEL: !Ref OpenAIModelParameter
           REGION: !Ref AWS::Region
+          TABLE_NAME: !Ref TicketsTable
 
-  TicketClassifierApi:
-    Type: AWS::ApiGatewayV2::Api
+  # -----------------
+  # API Gateway
+  # -----------------
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: TicketClassifierAPI
-      ProtocolType: HTTP
+      Name: ai-ticket-classifier-api
+      EndpointConfiguration:
+        Types: ["REGIONAL"]
 
-  LambdaIntegration:
-    Type: AWS::ApiGatewayV2::Integration
+  ApiResourceClassify:
+    Type: AWS::ApiGateway::Resource
     Properties:
-      ApiId: !Ref TicketClassifierApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !GetAtt TicketClassifierLambda.Arn
-      PayloadFormatVersion: "2.0"
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: classify
 
-  ApiGatewayPermission:
+  ApiResourceTickets:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: tickets
+
+  ApiMethodClassifyPost:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceClassify
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AITicketClassifierLambda.Arn}/invocations
+
+  ApiMethodTicketsGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceTickets
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AITicketClassifierLambda.Arn}/invocations
+
+  LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref TicketClassifierLambda
       Action: lambda:InvokeFunction
+      FunctionName: !Ref AITicketClassifierLambda
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TicketClassifierApi}/*/*
 
-  ClassifyRoute:
-    Type: AWS::ApiGatewayV2::Route
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiMethodClassifyPost
+      - ApiMethodTicketsGet
     Properties:
-      ApiId: !Ref TicketClassifierApi
-      RouteKey: "POST /classify"
-      Target: !Sub integrations/${LambdaIntegration}
-
-  TicketsRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref TicketClassifierApi
-      RouteKey: "GET /tickets"
-      Target: !Sub integrations/${LambdaIntegration}
-
-  ApiStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref TicketClassifierApi
+      RestApiId: !Ref ApiGateway
       StageName: prod
-      AutoDeploy: true
 
 Outputs:
   ApiUrl:
-    Description: "Invoke URL for API Gateway"
-    Value: !Sub "https://${TicketClassifierApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+    Description: Invoke URL for API Gateway
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"

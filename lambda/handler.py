@@ -10,7 +10,7 @@ import requests
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('REGION'))
 bedrock = boto3.client("bedrock-runtime", region_name="ap-south-1")
 
-table = dynamodb.Table(os.getenv('DDB_TABLE'))
+table = dynamodb.Table(os.getenv('TABLE_NAME'))
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 BEDROCK_MODEL = os.getenv('BEDROCK_MODEL', 'anthropic.claude-3-haiku-20240307-v1:0')
@@ -87,11 +87,13 @@ def classify_with_bedrock(text: str) -> dict:
 
 def lambda_handler(event, context):
     print(f"Event: {event}")
-    http_methdod = event.get("routeKey")
-    path = event.get("rawPath")
+    # http_methdod = event.get("routeKey")
+    # path = event.get("rawPath")
+    http_method = event["httpMethod"]
+    path = event["path"]
     body = json.loads(event.get("body") or "{}")
 
-    if http_methdod.startswith("POST") and path.endswith("classify"):
+    if http_method.startswith("POST") and path.endswith("classify"):
         # body = event.get("body") or "{}"
         text = body.get("ticket_text", "").strip()
         model = body.get("model", "openai").strip()
@@ -121,7 +123,7 @@ def lambda_handler(event, context):
         table.put_item(Item=item)
         return {"statusCode": 200, "body": json.dumps(item, default=str)}
     
-    if http_methdod.startswith("GET") and path.endswith("tickets"):
+    if http_method.startswith("GET") and path.endswith("tickets"):
         all_items = []
         response = table.scan()  # Scan returns all items
         items = response.get('Items', [])
@@ -137,4 +139,4 @@ def lambda_handler(event, context):
         all_items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return {"statusCode": 200, "body": json.dumps(all_items[:20], default=str)}
 
-    return {"statusCode": 404, "body": json.dumps({"error": "Unknown path"})}
+    return {"statusCode": 404, "body": json.dumps({"error": "Unsupported HTTP Method or Resource Path"})}
