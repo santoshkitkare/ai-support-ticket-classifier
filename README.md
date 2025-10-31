@@ -7,13 +7,13 @@ Cloud Formation Template file is present in CloudFormation folder.
 
 ### Upload your Lambda ZIP to an existing S3 bucket:
 
-aws s3 cp <lambda_function_dev_package>.zip \
+$ aws s3 cp <lambda_function_dev_package>.zip \
 s3://<your-bucket-name>/<bucket_path>/<lambda_function_dev_package>.zip
 
 
 ### Deploy the stack:
 
-aws cloudformation create-stack \
+$ aws cloudformation create-stack \
   --stack-name ai-ticket-classifier \
   --template-body file://cloudformation.yaml \
   --capabilities CAPABILITY_IAM \
@@ -31,35 +31,35 @@ All terraform script are present in terraform folder. You will need to install T
 
 #### 1. Initialize Terraform
 
-terraform init
+$ terraform init
 
 #### 2. Validate and plan
 
-terraform plan -out=tfplan
+$ terraform plan -out=tfplan
 
 #### 3. Apply changes
 
-terraform apply tfplan
+$ terraform apply tfplan
 
 #### 4. Destroy later if needed
 
-terraform destroy
+$ terraform destroy
 
 # Testing Application using curl
 
 ## Get Classification for give Ticket Text
-curl -X POST "<API Url>/classify" -H "Content-Type: application/json" \
+$ curl -X POST "`<API Url>`/classify" -H "Content-Type: application/json" \
 -d "{""ticket_text"": ""<Ticket text>"", ""model"": ""<bedrock/openai>""}" \
 --ssl-no-revoke
 
 #### Example
-curl -X POST "[<API Url>/classify](https://j2ixyuzc1a.execute-api.ap-south-1.amazonaws.com/prod/classify)" \
+$ curl -X POST "https://j2ixyuzc1a.execute-api.ap-south-1.amazonaws.com/prod/classify" \
 -H "Content-Type: application/json" \
 -d "{""ticket_text"": ""Windows Machine restarted continuously"", ""model"": ""bedrock""}" \
 --ssl-no-revoke
 
 ### Get all the Ticket Classification 
-curl -X GET "<API Url>/tickets" \
+$ curl -X GET "`<API Url>`/tickets" \
 -H "Content-Type: application/json" --ssl-no-revoke
 
 #### Example
