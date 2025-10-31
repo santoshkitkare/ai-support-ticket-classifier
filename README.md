@@ -7,7 +7,9 @@ Cloud Formation Template file is present in CloudFormation folder.
 
 ### Upload your Lambda ZIP to an existing S3 bucket:
 
-aws s3 cp <lambda_function_dev_package>.zip s3://<your-bucket-name>/<bucket_path>/<lambda_function_dev_package>.zip
+aws s3 cp <lambda_function_dev_package>.zip \
+s3://<your-bucket-name>/<bucket_path>/<lambda_function_dev_package>.zip
+
 
 ### Deploy the stack:
 
@@ -18,7 +20,7 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=LambdaS3Bucket,ParameterValue=<your-bucket-name> \
     ParameterKey=LambdaS3Key,ParameterValue=<bucket_path>/<lambda_function_dev_package>.zip \
-    ParameterKey=OpenAIApiKeyParameter,ParameterValue=<sk-your-api-key>
+    ParameterKey=OpenAIApiKeyParameter,ParameterValue=```<sk-your-api-key>```
 
 Once complete, grab the API URL from Outputs → ApiUrl.
 
@@ -46,16 +48,23 @@ terraform destroy
 # Testing Application using curl
 
 ## Get Classification for give Ticket Text
-curl -X POST "<API Url>/classify" -H "Content-Type: application/json" -d "{""ticket_text"": ""<Ticket text>"", ""model"": ""<bedrock/openai>""}"  --ssl-no-revoke
+curl -X POST "<API Url>/classify" -H "Content-Type: application/json" \
+-d "{""ticket_text"": ""<Ticket text>"", ""model"": ""<bedrock/openai>""}" \
+--ssl-no-revoke
 
 #### Example
-curl -X POST "[<API Url>/classify](https://j2ixyuzc1a.execute-api.ap-south-1.amazonaws.com/prod/classify)" -H "Content-Type: application/json" -d "{""ticket_text"": ""Windows Machine restarted continuously"", ""model"": ""bedrock""}"  --ssl-no-revoke
+curl -X POST "[<API Url>/classify](https://j2ixyuzc1a.execute-api.ap-south-1.amazonaws.com/prod/classify)" \
+-H "Content-Type: application/json" \
+-d "{""ticket_text"": ""Windows Machine restarted continuously"", ""model"": ""bedrock""}" \
+--ssl-no-revoke
 
 ### Get all the Ticket Classification 
-curl -X GET "<API Url>/tickets" -H "Content-Type: application/json" --ssl-no-revoke
+curl -X GET "<API Url>/tickets" \
+-H "Content-Type: application/json" --ssl-no-revoke
 
 #### Example
-curl -X GET "https://2pymg5lsn7.execute-api.ap-south-1.amazonaws.com/prod" --ssl-no-revoke 
+curl -X GET "https://2pymg5lsn7.execute-api.ap-south-1.amazonaws.com/prod" \
+--ssl-no-revoke 
 
 
 # Testing Application using Streamlit UI
